@@ -1,301 +1,119 @@
-# ⚡ hey-cicd — DevSecOps Dashboard
+# CI/CD Demo Project with GitHub Actions
 
-## 📁 Project Structure
+## 1. Concepts
 
-```
-hey-cicd/
-├── app/
-│   ├── app.py              # Flask application
-│   ├── templates/
-│   │   └── index.html      # Dashboard UI
-│   └── static/
-│       ├── css/styles.css
-│       └── js/main.js
-├── tests/
-│   └── test_app.py         # Unit tests
-├── k8s/
-│   ├── deployment.yaml     # Kubernetes Deployment
-│   └── service.yaml        # Kubernetes Service
-├── .github/
-│   └── workflows/
-│       └── devsecops.yml   # CI/CD Pipeline
-├── Dockerfile
-├── requirements.txt
-├── requirements-dev.txt
-└── README.md
-```
+**CI vs CD**
+- **CI (Continuous Integration):** every push or pull request is automatically built, tested and scanned. Here: the `test`, `sast`, `sca` and `docker-build` jobs.
+- **CD (Continuous Delivery/Deployment):** a validated build is automatically scanned, published and deployed. Here: the `image-scan`, `push` and `deploy` jobs.
 
----
+**CI/CD pipeline:** the chain of automated stages from commit to deployment:
+`Tests + SAST + SCA → Docker Build → Trivy Image Scan → Push to Docker Hub → Deploy to Kubernetes`
 
-## 🌐 API Endpoints
+**GitHub Actions:** GitHub's built-in automation platform. It runs workflows in response to repository events.
 
-| Method | Route | Description |
-|--------|-------|-------------|
-| `GET` | `/` | Dashboard UI |
-| `GET` | `/health` | Health check |
-| `GET` | `/api/status` | App info, uptime, Python version |
-| `GET` | `/api/greet/<name>` | Returns a greeting for the name |
-| `POST` | `/api/add` | Adds two numbers |
-| `POST` | `/api/calculate` | Calculator (add/subtract/multiply/divide/power/modulo) |
-| `POST` | `/api/pipeline/run` | Simulates a CI/CD pipeline run |
+**Workflow:** the YAML file `.github/workflows/ci.yml`, which defines the whole pipeline. It runs on `push` and `pull_request` to `main`.
+
+**Jobs:** independent groups of steps. Jobs run in parallel unless ordered with `needs:`. This workflow has seven: `test`, `sast`, `sca`, `docker-build`, `image-scan`, `push` and `deploy`.
+
+**Steps:** the individual tasks inside a job. A step either uses a prebuilt action (`uses:`) or runs a shell command (`run:`).
+
+**Runners:** the machines that execute jobs. All jobs use `runs-on: ubuntu-latest`, a fresh GitHub-hosted Linux VM.
+
+**Secrets:** encrypted values stored in repository settings, referenced as `${{ secrets.DOCKERHUB_TOKEN }}` for the Docker Hub login, so credentials never appear in the code.
+
+**Artifacts:** files saved from a workflow run (such as reports) using `actions/upload-artifact`. *(Not yet added to this workflow, see note in section 4.)*
+
+**Build:** `docker build` turns the source code into a container image.
+
+**Test:** `pytest --cov=app --cov-report=term-missing` runs the unit tests with coverage.
+
+**Pipeline execution:** a push to `main` triggers the workflow, jobs run in dependency order, and `deploy` runs only on pushes to `main` (`if: github.ref == 'refs/heads/main' && github.event_name == 'push'`).
 
 ---
 
-## 🖥️ Method 1 — Run Manually (Python)
+## 2. Application Source Code, Dockerfile and Workflow
 
-### Step 1 — Clone the repository
+### `ls -la` and `git ls-files`
+Lists the project folder and the files tracked by Git: the application source (`app/`), tests, Dockerfile, Kubernetes manifests and the workflow.
 
-```bash
-git clone https://github.com/YOUR_USERNAME/hey-cicd.git
-cd hey-cicd
-```
+![ls -la and git ls-files](part1-1.png)
 
-### Step 2 — Create a virtual environment
+### `cat Dockerfile` and `cat .github/workflows/ci.yml` (start)
+The Dockerfile builds on `python:3.12-slim`, installs the dependencies, copies the app, exposes port 5001 and starts it. The workflow file begins with its triggers and the first job, `test`.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate        # Mac/Linux
-# .venv\Scripts\activate         # Windows
-```
+![Dockerfile and start of workflow](part1-2.png)
 
-### Step 3 — Install dependencies
+### `cat .github/workflows/ci.yml` (continued): test, SAST and SCA jobs
+The `test` job installs dependencies and runs pytest. The `sast` job runs CodeQL, and the `sca` job begins.
 
-```bash
-pip install -r requirements.txt
-```
+![Workflow: test and SAST](part1-3.png)
 
-### Step 4 — Run the app
+### `cat .github/workflows/ci.yml` (continued): SCA and Docker build jobs
+`sca` scans dependencies with `pip-audit`. `docker-build` uses `needs: [test, sast, sca]`, so it runs only after all three pass.
 
-```bash
-python3 app/app.py
-```
+![Workflow: SCA and Docker build](part1-4.png)
 
-### Step 5 — Open in browser
+### `cat .github/workflows/ci.yml` (continued): image scan and push jobs
+`image-scan` scans the image with Trivy for HIGH and CRITICAL vulnerabilities. `push` logs in to Docker Hub using the `DOCKERHUB_TOKEN` secret.
 
-```
-http://localhost:5001
-```
+![Workflow: Trivy scan and push](part1-5.png)
 
-### Step 6 — Run the tests
+### `cat .github/workflows/ci.yml` (continued): push and deploy jobs
+The image is pushed with the commit SHA and `latest` tags. The `deploy` job (CD) creates a `kind` cluster, injects the image tag and applies the Kubernetes manifests.
 
-```bash
-pip install -r requirements-dev.txt
-python3 -m pytest --cov=app --cov-report=term-missing
-```
+![Workflow: push and deploy](part1-6.png)
 
-**Expected output:**
-```
-tests/test_app.py::test_home                      PASSED
-tests/test_app.py::test_health                    PASSED
-tests/test_app.py::test_greet                     PASSED
-tests/test_app.py::test_add_numbers               PASSED
-tests/test_app.py::test_add_numbers_missing_fields PASSED
-tests/test_app.py::test_calculator_multiply       PASSED
-tests/test_app.py::test_calculator_divide_by_zero PASSED
-tests/test_app.py::test_status                    PASSED
-8 passed in 0.Xs
-```
+### `cat .github/workflows/ci.yml` (end): rollout check and smoke test
+Waits for the rollout to finish, then port-forwards the service and uses `curl` to confirm the website and API respond.
 
-### Test the API manually
-
-```bash
-# Health check
-curl http://localhost:5001/health
-
-# Greet someone
-curl http://localhost:5001/api/greet/Nensi
-
-# Add two numbers
-curl -X POST http://localhost:5001/api/add \
-  -H "Content-Type: application/json" \
-  -d '{"number1": 10, "number2": 20}'
-
-# Calculator
-curl -X POST http://localhost:5001/api/calculate \
-  -H "Content-Type: application/json" \
-  -d '{"a": 6, "b": 3, "operation": "multiply"}'
-```
+![Workflow: rollout and curl test](part1-7.png)
 
 ---
 
-## 🐳 Method 2 — Run with Docker
+## 3. Build and Test (locally)
 
-### Prerequisites
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+### `python3 -m venv venv && source venv/bin/activate` and `pip install -r requirements-dev.txt`
+Creates an isolated Python environment and installs Flask, pytest and pytest-cov. This is the same as the workflow's "Install dependencies" step.
 
-### Step 1 — Build the Docker image
+![Create venv and install dependencies](part2-1.png)
 
-```bash
-docker build -t hey-cicd:latest .
-```
+### `pytest --cov=app --cov-report=term-missing` and `docker build -t session17-python:local .`
+**Test:** all 8 unit tests pass, with a coverage report. **Build:** Docker builds the image from the Dockerfile, step by step.
 
-### Step 2 — Run the container
+![pytest and docker build](part2-2.png)
 
-```bash
-docker run -p 5001:5001 hey-cicd:latest
-```
+### `docker images | grep session17`, `docker run -d -p 5001:5001 --name demo session17-python:local`, `curl http://localhost:5001/api/status`, `docker rm -f demo`
+Confirms the image exists, runs it as a container, checks the API returns `"status": "running"`, then removes the container.
 
-### Step 3 — Open in browser
-
-```
-http://localhost:5001
-```
-
-### Useful Docker commands
-
-```bash
-# See running containers
-docker ps
-
-# Stop the container
-docker stop <container-id>
-
-# Remove the image
-docker rmi hey-cicd:latest
-
-# Run in background (detached mode)
-docker run -d -p 5001:5001 hey-cicd:latest
-```
+![docker images, run, curl, rm](part2-3.png)
 
 ---
 
-## ⚙️ Method 3 — CI/CD Pipeline (GitHub Actions)
+## 4. Pipeline Execution
 
-The pipeline runs automatically every time you push code to `main` or open a pull request.
+### `git status`, `git add . && git commit -m "..."`, `git push origin main`
+Commits the changes and pushes them to `main`. The push is the event that triggers the workflow.
 
-### Pipeline Stages
+![git status, commit, push](part3-1.png)
 
-```
-Push to GitHub
-      │
-      ▼
-┌─────────────────┐
-│  STEP 1: Tests  │  pytest — runs all 8 unit tests
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│  STEP 2: SAST   │  CodeQL — scans code for security issues
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│   STEP 3: SCA   │  pip-audit — checks for vulnerable packages
-└────────┬────────┘
-         │ (all 3 must pass)
-┌────────▼────────┐
-│  STEP 4: Build  │  docker build — creates the Docker image
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│  STEP 5: Scan   │  Trivy — scans the Docker image for CVEs
-└────────┬────────┘
-         │
-┌────────▼────────┐
-│  STEP 6: Push   │  Pushes image to GitHub Container Registry
-└────────┬────────┘
-         │ (only on push to main)
-┌────────▼────────┐
-│ STEP 7: Deploy  │  kubectl apply → deploys to Kubernetes
-└─────────────────┘
-```
+### `gh run list`
+Lists the workflow runs. The newest is in progress. The previous run succeeded, and the earliest failed before the workflow file was fixed.
 
-### How to trigger the pipeline
+![gh run list](part3-2.png)
 
-```bash
-# Make a change, commit, and push
-git add .
-git commit -m "your message"
-git push origin main
-```
+### `gh run watch`
+Streams the live progress of the run, showing job and step status. The annotations are deprecation warnings, not failures.
 
-Then go to your GitHub repo → **Actions** tab to watch it run.
+![gh run watch](part3-3.png)
 
-### Required GitHub Secrets
+### GitHub Actions: pipeline in progress
+The job graph shows Unit Tests, SAST and SCA running in parallel, then Docker Build, Image Scan, Push and Deploy in sequence.
 
-Go to **GitHub repo → Settings → Secrets and variables → Actions** and add:
+![Pipeline in progress](part3-4.png)
 
-| Secret Name | Value |
-|-------------|-------|
-| `KUBECONFIG` | Contents of your `~/.kube/config` file (needed for Step 7 deploy) |
+### GitHub Actions: pipeline completed successfully ✅
+All seven jobs passed and the run status is **Success**, including the Kubernetes deployment.
 
-> ℹ️ `GITHUB_TOKEN` is automatically provided by GitHub — you don't need to add it manually.
+![Pipeline succeeded](part3-5.png)
 
-### View your Docker image after push
-
-After Step 6 runs, your image is available at:
-```
-ghcr.io/YOUR_USERNAME/hey-cicd:latest
-```
-
-Go to **GitHub repo → Packages** to see it.
-
----
-
-## ☸️ Method 4 — Deploy to Kubernetes manually
-
-> Do this if you want to deploy without the pipeline, directly from your terminal.
-
-### Prerequisites
-- A running Kubernetes cluster (minikube, k3s, or cloud)
-- `kubectl` installed and connected to your cluster
-
-### Step 1 — Apply the manifests
-
-```bash
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/service.yaml
-```
-
-### Step 2 — Check the pods are running
-
-```bash
-kubectl get pods
-kubectl get service session17-python
-```
-
-### Step 3 — Access the app
-
-```bash
-# If using minikube
-minikube service session17-python
-
-# Or access via NodePort
-http://<your-node-ip>:30001
-```
-
-### Useful kubectl commands
-
-```bash
-# See all running pods
-kubectl get pods
-
-# See logs from a pod
-kubectl logs <pod-name>
-
-# Delete the deployment
-kubectl delete -f k8s/deployment.yaml
-kubectl delete -f k8s/service.yaml
-```
-
----
-
-## 🧪 DevSecOps Concepts Covered
-
-| Concept | Tool Used | Where |
-|---------|-----------|-------|
-| **Unit Testing** | pytest + pytest-cov | `tests/test_app.py` |
-| **SAST** (Static Application Security Testing) | GitHub CodeQL | Pipeline Step 2 |
-| **SCA** (Software Composition Analysis) | pip-audit | Pipeline Step 3 |
-| **Containerisation** | Docker | `Dockerfile` |
-| **Container Image Scanning** | Trivy | Pipeline Step 5 |
-| **Container Registry** | GitHub Container Registry (GHCR) | Pipeline Step 6 |
-| **Orchestration** | Kubernetes | `k8s/` folder |
-| **CI/CD Automation** | GitHub Actions | `.github/workflows/devsecops.yml` |
-
----
-
-## 👩‍💻 Built With
-
-- **Python 3.12** + **Flask 3.x**
-- **Docker**
-- **Kubernetes**
-- **GitHub Actions**
+> **Note on artifacts:** the Artifacts field above shows `–` because this workflow does not yet upload an artifact. One can be added to the `test` job with `actions/upload-artifact@v4` after running pytest with `--cov-report=xml`.
